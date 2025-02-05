@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/arvindkhoisnam/go_app/middleware"
 	"github.com/arvindkhoisnam/go_app/models"
 	"github.com/arvindkhoisnam/go_app/storage"
 	"github.com/gofiber/fiber/v2"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/joho/godotenv"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -20,7 +22,6 @@ type Todo struct{
 }
 
 type User struct {
-	ID 		 string `json:"id"`
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
@@ -58,6 +59,12 @@ func (r *Repository) AddTodo(c *fiber.Ctx) error {
 
 func (r *Repository) GetAllTodos(c *fiber.Ctx) error {
 	todos := &[]models.Todos{}
+
+	userID := c.Locals("user_id").(string)
+	role := c.Locals("role").(string)
+
+	fmt.Println(userID)
+	fmt.Println(role)
 
 	err := r.DB.Find(todos).Error
 	if err != nil {
@@ -134,13 +141,70 @@ func (r *Repository)Signup(c *fiber.Ctx) error {
 	c.Status(200).JSON(fiber.Map{"message":"User successfully signed up."})
 	return nil
 }
+
+func (r *Repository)Signin(c *fiber.Ctx) error {
+	user := &User{}
+	userModel := &models.User{}
+
+	// Parse request body
+	if err := c.BodyParser(user); err != nil {
+		return c.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{
+			"message": "Request failed.",
+		})
+	}
+
+	// Check if user exists in the database
+	if err := r.DB.Where("username = ?", user.Username).First(userModel).Error; err != nil {
+		return c.Status(403).JSON(fiber.Map{
+			"message": "Invalid username or password.",
+		})
+	}
+
+	// Compare provided password with the hashed password
+	if err := bcrypt.CompareHashAndPassword([]byte(userModel.Password), []byte(user.Password)); err != nil {
+		return c.Status(403).JSON(fiber.Map{
+			"message": "Invalid username or password.",
+		})
+	}
+
+
+    // Generate JWT Token
+	jwtSec := os.Getenv("JWT_SECRET")
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+        "user_id": userModel.ID,
+		"role": "admin",
+    })
+    tokenString, err := token.SignedString([]byte(jwtSec))
+    if err != nil {
+        return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+            "message": "Could not generate token.",
+			"error":err.Error(),
+        })
+    }
+
+    // Set cookie in response
+    c.Cookie(&fiber.Cookie{
+        Name:     "auth_token",
+        Value:    tokenString,
+        HTTPOnly: true, // Prevents JavaScript access to cookie
+        Secure:   true, // Use secure flag for HTTPS
+        SameSite: "lax",
+    })
+
+	// If login is successful, return success response (you might want to generate a JWT token here)
+	return c.Status(http.StatusOK).JSON(fiber.Map{
+		"message": "Login successful.",
+		"token":tokenString,
+	})
+}
 func (r *Repository) SetupRoutes(app *fiber.App){
 	api := app.Group("/api")
 	api.Post("/todo",r.AddTodo)
-	api.Get("/all",r.GetAllTodos)
+	api.Get("/all",middleware.AuthMiddleware,r.GetAllTodos)
 	api.Patch("/todo/:id",r.UpdateTodo)
 	api.Delete("/todo/:id",r.DeleteTodo)
 	api.Post("/signup",r.Signup)
+	api.Post("/signin",r.Signin)
 }
 func main(){
 	err := godotenv.Load(".env")
