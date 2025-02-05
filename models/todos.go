@@ -1,14 +1,28 @@
 package models
 
-import "gorm.io/gorm"
+import (
+	"github.com/lucsky/cuid"
+	"gorm.io/gorm"
+)
 
 type Todos struct {
-	ID 		   uint    `gorm:"primary key;autoIncrement" json:"id"`
+	ID 		   uint    `gorm:"primaryKey;autoIncrement" json:"id"`
 	Completed  *bool   `json:"completed"`
 	Body 	   *string `json:"body"`
 }
 
-func MigrateTodos(db *gorm.DB) error {
-	err := db.AutoMigrate(&Todos{})
+type User struct {
+	ID 		  string 	`gorm:"primaryKey" json:"id"`
+	Username  string	`json:"username"`
+	Password  string	`json:"password"`
+
+}
+func (u *User)BeforeCreate(tx *gorm.DB) (err error) {
+    u.ID = cuid.New()
+    return
+}
+
+func MigrateDB(db *gorm.DB) error {
+	err := db.AutoMigrate(&Todos{},&User{})
 	return err
 }

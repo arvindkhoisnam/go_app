@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"github.com/arvindkhoisnam/go_app/storage"
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 type Todo struct{
@@ -17,9 +19,20 @@ type Todo struct{
 	Body string	`json:"body"`
 }
 
+type User struct {
+	ID 		 string `json:"id"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
 type Repository struct {
 	DB *gorm.DB
 }
+
+const (
+	MinCost     int = 4  // the minimum allowable cost as passed in to GenerateFromPassword
+	MaxCost     int = 31 // the maximum allowable cost as passed in to GenerateFromPassword
+	DefaultCost int = 10 // the cost that will actually be set if a cost below MinCost is passed into GenerateFromPassword
+)
 
 func (r *Repository) AddTodo(c *fiber.Ctx) error {
 	todo := &Todo{} 
@@ -43,12 +56,91 @@ func (r *Repository) AddTodo(c *fiber.Ctx) error {
 	return nil
 }
 
+func (r *Repository) GetAllTodos(c *fiber.Ctx) error {
+	todos := &[]models.Todos{}
+
+	err := r.DB.Find(todos).Error
+	if err != nil {
+		c.Status(400).JSON(fiber.Map{"message":"Unable to fetch todos"})
+	}
+	c.Status(200).JSON(fiber.Map{"data":todos})
+	return nil
+}
+
+func (r *Repository) UpdateTodo(c *fiber.Ctx) error {
+	id := c.Params("id")
+	todo := &models.Todos{}
+
+	result := r.DB.Model(&models.Todos{}).Where("id = ?",id).Update("completed", "true")
+	if result.Error != nil {
+		c.Status(400).JSON(fiber.Map{"message":"Unable to update todo"})
+	}
+	 // Fetch the updated todo from the database
+	err := r.DB.Where("id = ?", id).First(todo).Error
+	if err != nil {
+		// Return an error response if fetching the updated todo fails
+		return c.Status(400).JSON(fiber.Map{"message": "Unable to fetch updated todo", "error": err.Error()})
+		}
+	c.Status(200).JSON(fiber.Map{"data":todo})
+	return nil
+}
+
+func (r *Repository)DeleteTodo(c *fiber.Ctx) error {
+	id := c.Params("id")
+	if id == "" {	
+		fmt.Println(id)
+		 return c.Status(400).JSON(fiber.Map{"message":"Invalid id"})
+	}
+
+    // Delete the todo from the database
+    result := r.DB.Where("id = ?", id).Delete(&models.Todos{})
+    if result.Error != nil {
+        // Return an error response if the deletion fails
+        return c.Status(400).JSON(fiber.Map{"message": "Unable to delete todo", "error": result.Error.Error()})
+    }
+
+    // Check if any rows were affected
+    if result.RowsAffected == 0 {
+        return c.Status(404).JSON(fiber.Map{"message": "Todo not found"})
+    }
+	c.Status(200).JSON(fiber.Map{"message":"Todo deleted successfully"})
+	return nil
+}
+
+func (r *Repository)Signup(c *fiber.Ctx) error {
+	user := &models.User{}
+	err := c.BodyParser(user)
+	if err != nil {
+		c.Status(http.StatusUnprocessableEntity).JSON(fiber.Map{"message":"Request failed."})
+		return err
+	}
+	if user.Username == "" || user.Password == "" {
+		return c.Status(400).JSON(fiber.Map{"message":"Invalid credentials."})
+		
+	}  
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(user.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return c.Status(http.StatusInternalServerError).JSON(fiber.Map{
+			"message": "Failed to hash password.",
+		})
+	}
+	// Store hashed password
+	user.Password = string(hashedPassword)
+	err = r.DB.Create(user).Error
+	if err != nil {
+		c.Status(400).JSON(fiber.Map{"message":"Error while signinup."})
+		return err
+	}
+	c.Status(200).JSON(fiber.Map{"message":"User successfully signed up."})
+	return nil
+}
 func (r *Repository) SetupRoutes(app *fiber.App){
 	api := app.Group("/api")
 	api.Post("/todo",r.AddTodo)
-	// api.Get("/",r.GetAllTodos)
-	// api.Patch("/todo/:id",r.UpdateTodo)
-	// api.Delete("/todo/:id",r.DeleteTodo)
+	api.Get("/all",r.GetAllTodos)
+	api.Patch("/todo/:id",r.UpdateTodo)
+	api.Delete("/todo/:id",r.DeleteTodo)
+	api.Post("/signup",r.Signup)
 }
 func main(){
 	err := godotenv.Load(".env")
@@ -71,7 +163,7 @@ func main(){
 		log.Fatal("could not load the database")
 	}
 
-	err = models.MigrateTodos(db)
+	err = models.MigrateDB(db)
 	if err != nil {
 		log.Fatal("could not migrate db")
 	}
@@ -86,53 +178,5 @@ func main(){
 	app.Get("/health",func(c *fiber.Ctx)error {
 		return c.Status(200).JSON(fiber.Map{"message":"Healthy Server"})
 	})
-
-	// app.Post("/api/todo", func(c *fiber.Ctx) error {
-	// 	todo := &Todo{}
-	// 	err := c.BodyParser(todo)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-	// 	if todo.Body == ""{
-	// 		return c.Status(400).JSON(fiber.Map{"message":"Invalid Input"})
-	// 	}
-
-	// 	todo.ID = len(todos) + 1
-	// 	todos = append(todos, *todo)
-	// 	return c.Status(200).JSON(fiber.Map{"message":"Todo created!!","todo":todo})
-	// })
-
-	// app.Get("/api/all",func(c *fiber.Ctx) error{
-	// 	return c.Status(200).JSON(todos)
-	// })
-
-	// app.Patch("/api/todo/:id",func (c *fiber.Ctx) error  {
-	// 	id := c.Params("id")
-
-	// 	for i, todo := range todos {
-	// 		if fmt.Sprint(todo.ID) == id {
-	// 			todos[i].Completed = true;
-	// 			return c.Status(200).JSON(fiber.Map{"message":"Todo updated."})
-	// 		}
-	// 	}
-	// 	return c.Status(400).JSON(fiber.Map{"message":"No todo found with the id"})
-	// })
-
-	// app.Delete("/api/todo/:id",func(c *fiber.Ctx) error {
-	// 	id := c.Params("id")
-
-	// 	for i, todo := range todos {
-	// 		if fmt.Sprint(todo.ID) == id {
-	// 			todos = append(todos[:i],todos[i+1:]... )
-	// 			return c.Status(200).JSON(todos)
-	// 		}
-	// 	}
-	// 	return c.Status(400).JSON(fiber.Map{"message":"No todo found with the id"})
-	// })
-
-	// err := app.Listen(PORT)
-	// if err != nil {
-	// 	log.Fatal(err)
-	// } 
 	log.Fatal(app.Listen(":"+PORT))
 }
